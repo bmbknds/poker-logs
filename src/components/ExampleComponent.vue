@@ -13,15 +13,59 @@
             {{ props.row.name }}
           </q-td>
           <q-td key="value" :props="props">
-            {{ props.row.value }}
+            Input value:
+            <br />
+            {{ props.row.value ?? 'N/A' }}
+            <br />
+            Output value:
+            <br />
+            {{ props.row?.finalValue ?? 'N/A' }}
+            <q-popup-edit
+              v-model.number="props.row.finalValue"
+              v-slot="scope"
+              buttons
+              @save="(value) => submitFinalResult(props.row.id, value)"
+            >
+              <q-input
+                v-model.number="scope.value"
+                dense
+                autofocus
+                type="number"
+                @keyup.enter="scope.set"
+              />
+            </q-popup-edit>
           </q-td>
           <q-td key="action" :props="props">
             <div>
-              <q-btn color="primary" outline label="Buy" class="q-ma-xs" />
+              <q-btn
+                @click="
+                  insertTransaction({
+                    value: -100,
+                    type: 'BUY',
+                    userId: props.row?.id,
+                  })
+                "
+                color="primary"
+                outline
+                label="Buy"
+                class="q-ma-xs"
+              />
             </div>
 
             <div>
-              <q-btn outline color="red-6" label="Pay" class="q-ma-xs" />
+              <q-btn
+                @click="
+                  insertTransaction({
+                    value: 100,
+                    type: 'PAY',
+                    userId: props.row?.id,
+                  })
+                "
+                outline
+                color="red-6"
+                label="Pay"
+                class="q-ma-xs"
+              />
             </div>
           </q-td>
         </q-tr>
@@ -31,30 +75,100 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { Todo, Meta } from './models';
-import { useQuery, useResult } from '@vue/apollo-composable';
+import { computed } from 'vue';
+import { useQuery, useMutation } from '@vue/apollo-composable';
+import { format, formatISO } from 'date-fns';
+
 import gql from 'graphql-tag';
-const { result, loading, error } = useQuery(gql`
-  query GetTransaction {
+const GET_USER_DATA = gql`
+  query GetUser {
     user {
       id
       name
-      user_transactions {
+      user_transactions(where: { type: { _eq: "FINAL" } }) {
         value
-        type
+      }
+      user_transactions_aggregate(where: { type: { _neq: "FINAL" } }) {
+        aggregate {
+          sum {
+            value
+          }
+        }
       }
     }
   }
-`);
-const data = computed(() => result.value?.user);
-console.log('result', result);
+`;
 
-const clickCount = ref(0);
-function increment() {
-  clickCount.value += 1;
-  return clickCount.value;
-}
+const INSERT_TRANSACTION = gql`
+  mutation InsertTransaction(
+    $time: date
+    $userId: Int
+    $type: String
+    $timeStamp: timestamptz
+    $value: Int
+  ) {
+    insert_transaction(
+      objects: {
+        time: $time
+        userId: $userId
+        type: $type
+        timeStamp: $timeStamp
+        value: $value
+      }
+    ) {
+      affected_rows
+      returning {
+        time
+        id
+        userId
+        value
+        type
+        timeStamp
+      }
+    }
+  }
+`;
+
+const { result, loading, error, refetch } = useQuery(GET_USER_DATA);
+const { mutate: insertTransactionMutation } = useMutation(INSERT_TRANSACTION);
+
+const data = computed(() =>
+  result.value?.user.map(
+    ({ id, name, user_transactions_aggregate, user_transactions }: any) => ({
+      id,
+      name,
+      value: user_transactions_aggregate?.aggregate?.sum?.value,
+      finalValue: user_transactions?.[0]?.value,
+    })
+  )
+);
+
+const insertTransaction = async ({ value, userId, type }: any) => {
+  const transaction = {
+    time: format(new Date(), 'yyyy-MM-dd'),
+    timeStamp: formatISO(new Date()),
+    userId,
+    type,
+    value,
+  };
+
+  await insertTransactionMutation(transaction);
+  refetch();
+};
+
+const submitFinalResult = async (userId: number, value: number) => {
+  const transaction = {
+    time: format(new Date(), 'yyyy-MM-dd'),
+    timeStamp: formatISO(new Date()),
+    userId,
+    type: 'FINAL',
+    value,
+  };
+
+  await insertTransactionMutation(transaction);
+  refetch();
+};
+
 const columns: any[] = [
   {
     name: 'name',
